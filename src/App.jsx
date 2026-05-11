@@ -208,21 +208,63 @@ const globalStyles = `
 /* ══════════════════════════════════════════════════════════════ */
 
 export default function App() {
+  // ── Stato principale: quale "schermata" è attiva ──
+  // "auth"     → login
+  // "register" → registrazione
+  // "pickRest" → scelta ristorante (solo ristoratori, dopo login/registrazione)
+  // "home"     → app vera e propria
   const [page, setPage] = useState("auth");
-  const [user, setUser] = useState(null);
-  const [restaurantsData, setRestaurantsData] = useState(INITIAL_RESTAURANTS);
-  const [globalBookings, setGlobalBookings] = useState(INITIAL_BOOKINGS);
 
+  // ── Utente autenticato (null finché non si fa login) ──
+  const [user, setUser] = useState(null);
+
+  // ── Database utenti registrati in memoria ──
+  // Ogni record: { name, email, pass, role }
+  // Viene popolato da RegisterPage e consultato da AuthPage per il login.
+  const [registeredUsers, setRegisteredUsers] = useState([]);
+
+  // ── Dati condivisi tra BusinessApp e CustomerApp ──
+  const [restaurantsData, setRestaurantsData] = useState(INITIAL_RESTAURANTS);
+  const [globalBookings, setGlobalBookings]   = useState(INITIAL_BOOKINGS);
+
+  // ── Inietta i CSS globali una sola volta al mount ──
   useEffect(() => {
     const style = document.createElement("style");
     style.textContent = globalStyles;
     document.head.appendChild(style);
   }, []);
 
-  const handleLogin = (u) => { setUser(u); setPage("home"); };
+  // ── Callback chiamata quando il login/registrazione va a buon fine ──
+  // I ristoratori devono prima scegliere il locale → "pickRest".
+  // I clienti entrano direttamente nell'app → "home".
+  const handleLogin = (u) => {
+    setUser(u);
+    setPage(u.role === "ristoratore" ? "pickRest" : "home");
+  };
+
+  // ── Callback per la registrazione di un nuovo utente ──
+  // Salva le credenziali nel database in memoria, poi avvia il login.
+  const handleRegister = (u, pass) => {
+    // Aggiunge l'utente al registro: email + password + dati profilo
+    setRegisteredUsers(prev => [...prev, { ...u, pass }]);
+    handleLogin(u);
+  };
+
+  // ── Callback per la scelta del ristorante (solo ristoratori) ──
+  const handlePickRestaurant = (restaurantId) => {
+    setUser(prev => ({ ...prev, restaurantId }));
+    setPage("home");
+  };
+
+  // ── Logout: azzera utente e torna al login ──
   const handleLogout = () => { setUser(null); setPage("auth"); };
 
-  if (page === "auth") return <AuthPage onLogin={handleLogin} />;
+  // ── Routing ──
+  if (page === "auth")     return <AuthPage onLogin={handleLogin} onGoRegister={() => setPage("register")} registeredUsers={registeredUsers} />;
+  if (page === "register") return <RegisterPage onRegistered={handleRegister} onGoLogin={() => setPage("auth")} registeredUsers={registeredUsers} />;
+  if (page === "pickRest") return <RestaurantPickPage user={user} onPick={handlePickRestaurant} onLogout={handleLogout} />;
+
+  // ── App vera e propria ──
   if (user?.role === "ristoratore") return (
     <BusinessApp user={user} onLogout={handleLogout}
       bookings={globalBookings} setBookings={setGlobalBookings}
@@ -236,143 +278,395 @@ export default function App() {
 }
 
 /* ══════════════════════════════════════════════════════════════ */
-/* 5. AUTH PAGE                                                   */
+/* 5. AUTH PAGE  (solo login)                                     */
 /* ══════════════════════════════════════════════════════════════ */
 
-function AuthPage({ onLogin }) {
-  const [authData, setAuthData] = useState({ email: "", pass: "" });
-  const [role, setRole] = useState("cliente");
-  const [restaurantId, setRestaurantId] = useState(1);
-  const [err, setErr] = useState("");
-
-  const submit = () => {
-    if (!authData.email.includes("@")) return setErr("Indirizzo email non valido.");
-    if (authData.pass.length < 4) return setErr("La password deve contenere almeno 4 caratteri.");
-    onLogin({
-      name: authData.email.split("@")[0],
-      email: authData.email,
-      role,
-      restaurantId: role === "ristoratore" ? parseInt(restaurantId) : null,
-    });
-  };
-
+// Componente shell riutilizzato da tutte le pagine di autenticazione:
+// sfondo scuro con cerchi concentrici dorati e card centrale.
+function AuthShell({ children }) {
   return (
     <div style={{
       minHeight: "100vh",
-      display: "flex",
-      flexDirection: "column",
-      justifyContent: "center",
-      alignItems: "center",
+      display: "flex", flexDirection: "column",
+      justifyContent: "center", alignItems: "center",
       padding: 24,
       background: `radial-gradient(ellipse at 50% 0%, rgba(201,168,76,0.08) 0%, transparent 60%), ${T.bg}`,
     }}>
-      {/* Decorative lines */}
+      {/* Cerchi decorativi fissi in background */}
       <div style={{ position: "fixed", inset: 0, pointerEvents: "none", overflow: "hidden", zIndex: 0 }}>
         {[...Array(5)].map((_, i) => (
           <div key={i} style={{
-            position: "absolute",
-            left: "50%",
-            top: "50%",
-            transform: `translate(-50%,-50%)`,
-            width: `${300 + i*120}px`,
-            height: `${300 + i*120}px`,
+            position: "absolute", left: "50%", top: "50%",
+            transform: "translate(-50%,-50%)",
+            width: `${300 + i*120}px`, height: `${300 + i*120}px`,
             borderRadius: "50%",
             border: `1px solid rgba(201,168,76,${0.04 - i*0.007})`,
           }}/>
         ))}
       </div>
-
+      {/* Card centrale */}
       <div className="fade-up" style={{
-        background: T.surface,
-        border: `1px solid ${T.border}`,
-        borderRadius: 28,
-        padding: "44px 36px",
-        width: "100%",
-        maxWidth: 440,
-        position: "relative",
-        zIndex: 1,
+        background: T.surface, border: `1px solid ${T.border}`,
+        borderRadius: 28, padding: "44px 36px",
+        width: "100%", maxWidth: 440,
+        position: "relative", zIndex: 1,
         boxShadow: "0 40px 100px rgba(0,0,0,0.5)",
       }}>
-        {/* Gold accent top bar */}
+        {/* Barra dorata in cima alla card */}
         <div style={{
-          position: "absolute",
-          top: 0, left: "50%",
+          position: "absolute", top: 0, left: "50%",
           transform: "translateX(-50%)",
           width: 60, height: 2,
           background: `linear-gradient(90deg, transparent, ${T.gold}, transparent)`,
           borderRadius: 1,
         }}/>
-
-        <div style={{ textAlign: "center", marginBottom: 40 }}>
-          <h1 style={{ fontFamily: fontSerif, color: T.gold, fontSize: 48, fontWeight: 400, letterSpacing: 2, lineHeight: 1 }}>
-            Tavolify
-          </h1>
-          <p style={{ color: T.muted, fontSize: 10, letterSpacing: 4, marginTop: 8, textTransform: "uppercase" }}>
-            The Dining Network · Puglia
-          </p>
-          <div style={{ width: 40, height: 1, background: T.border, margin: "16px auto 0" }}/>
-        </div>
-
-        {/* Role toggle */}
-        <div style={{ display: "flex", background: T.surfaceHi, borderRadius: 14, padding: 4, marginBottom: 28, border: `1px solid ${T.border}` }}>
-          {[["cliente","🍽 Ospite"],["ristoratore","🏛 Ristoratore"]].map(([val, label]) => (
-            <button key={val} onClick={() => setRole(val)} style={{
-              flex: 1, padding: "11px 8px", borderRadius: 11, border: "none",
-              background: role === val ? T.gold : "transparent",
-              color: role === val ? T.bg : T.muted,
-              fontWeight: role === val ? "600" : "400",
-              cursor: "pointer", transition: "all 0.2s",
-              fontSize: 13, letterSpacing: 0.5,
-            }}>{label}</button>
-          ))}
-        </div>
-
-        {role === "ristoratore" && (
-          <div style={{ marginBottom: 18 }}>
-            <label style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: 1.5, display: "block", marginBottom: 8 }}>Il tuo locale</label>
-            <select value={restaurantId} onChange={e => setRestaurantId(e.target.value)}>
-              {INITIAL_RESTAURANTS.map(r => (
-                <option key={r.id} value={r.id}>{r.name} — {r.city}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        <div style={{ marginBottom: 14 }}>
-          <label style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: 1.5, display: "block", marginBottom: 8 }}>
-            {role === "cliente" ? "Email" : "Email del Locale"}
-          </label>
-          <input type="email" placeholder="nome@esempio.com"
-            value={authData.email} onChange={e => setAuthData({...authData, email: e.target.value})} />
-        </div>
-        <div style={{ marginBottom: 20 }}>
-          <label style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: 1.5, display: "block", marginBottom: 8 }}>Password</label>
-          <input type="password" placeholder="••••••••"
-            value={authData.pass} onChange={e => setAuthData({...authData, pass: e.target.value})}
-            onKeyDown={e => e.key === "Enter" && submit()} />
-        </div>
-
-        {err && <p className="fade-in" style={{ color: T.red, fontSize: 13, marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>⚠ {err}</p>}
-
-        <button onClick={submit} style={{
-          width: "100%", padding: "17px 24px", borderRadius: 14,
-          background: `linear-gradient(135deg, ${T.gold} 0%, #a87a28 100%)`,
-          color: T.bg, border: "none", cursor: "pointer",
-          fontSize: 15, fontWeight: "700", letterSpacing: 0.5,
-          boxShadow: `0 8px 30px rgba(201,168,76,0.25)`,
-          transition: "transform 0.15s, box-shadow 0.15s",
-        }}
-          onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = "0 12px 40px rgba(201,168,76,0.35)"; }}
-          onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 8px 30px rgba(201,168,76,0.25)"; }}
-        >
-          Accedi · {role === "cliente" ? "Area Ospiti" : "Area Business"}
-        </button>
-
-        <p style={{ textAlign: "center", fontSize: 12, color: T.muted, marginTop: 22, lineHeight: 1.7 }}>
-          Tavoli, sapori e ricordi indimenticabili<br/>nelle migliori tavole della Puglia.
-        </p>
+        {children}
       </div>
     </div>
+  );
+}
+
+// Logo e sottotitolo comuni a tutte le pagine di autenticazione.
+function AuthLogo() {
+  return (
+    <div style={{ textAlign: "center", marginBottom: 36 }}>
+      <h1 style={{ fontFamily: fontSerif, color: T.gold, fontSize: 48, fontWeight: 400, letterSpacing: 2, lineHeight: 1 }}>
+        Tavolify
+      </h1>
+      <p style={{ color: T.muted, fontSize: 10, letterSpacing: 4, marginTop: 8, textTransform: "uppercase" }}>
+        The Dining Network · Puglia
+      </p>
+      <div style={{ width: 40, height: 1, background: T.border, margin: "16px auto 0" }}/>
+    </div>
+  );
+}
+
+// ── Pagina di LOGIN ──
+// Riceve registeredUsers per verificare email+password al momento dell'accesso.
+// Se l'email non esiste → "account non trovato".
+// Se la password è sbagliata → "password errata".
+// Se tutto ok → chiama onLogin con i dati dell'utente registrato.
+function AuthPage({ onLogin, onGoRegister, registeredUsers }) {
+  const [authData, setAuthData] = useState({ email: "", pass: "" });
+  // Il toggle ruolo serve solo come hint visivo; il ruolo reale
+  // viene letto dal record salvato in registeredUsers.
+  const [role, setRole] = useState("cliente");
+  const [err, setErr]   = useState("");
+
+  const submit = () => {
+    if (!authData.email.includes("@")) return setErr("Indirizzo email non valido.");
+    if (authData.pass.length < 4)      return setErr("La password deve contenere almeno 4 caratteri.");
+
+    // Cerca l'utente nel database in-memory per email (case-insensitive)
+    const found = registeredUsers.find(u => u.email.toLowerCase() === authData.email.toLowerCase());
+
+    if (!found) {
+      // Email non registrata: suggerisce di creare un account
+      return setErr("Nessun account trovato con questa email. Registrati per accedere.");
+    }
+    if (found.pass !== authData.pass) {
+      // Email trovata ma password sbagliata
+      return setErr("Password errata. Riprova.");
+    }
+
+    // Login riuscito: passa i dati salvati in fase di registrazione
+    // (così nome, ruolo, ecc. sono sempre coerenti)
+    onLogin({ name: found.name, email: found.email, role: found.role, restaurantId: null });
+  };
+
+  return (
+    <AuthShell>
+      <AuthLogo />
+
+      {/* Toggle ruolo (hint visivo; il ruolo reale viene dal DB) */}
+      <div style={{ display: "flex", background: T.surfaceHi, borderRadius: 14, padding: 4, marginBottom: 28, border: `1px solid ${T.border}` }}>
+        {[["cliente","🍽 Ospite"],["ristoratore","🏛 Ristoratore"]].map(([val, label]) => (
+          <button key={val} onClick={() => setRole(val)} style={{
+            flex: 1, padding: "11px 8px", borderRadius: 11, border: "none",
+            background: role === val ? T.gold : "transparent",
+            color:      role === val ? T.bg   : T.muted,
+            fontWeight: role === val ? "600"  : "400",
+            cursor: "pointer", transition: "all 0.2s",
+            fontSize: 13, letterSpacing: 0.5,
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {/* Campo email */}
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: 1.5, display: "block", marginBottom: 8 }}>
+          Email
+        </label>
+        <input type="email" placeholder="nome@esempio.com"
+          value={authData.email} onChange={e => setAuthData({...authData, email: e.target.value})} />
+      </div>
+
+      {/* Campo password */}
+      <div style={{ marginBottom: 20 }}>
+        <label style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: 1.5, display: "block", marginBottom: 8 }}>Password</label>
+        <input type="password" placeholder="••••••••"
+          value={authData.pass} onChange={e => setAuthData({...authData, pass: e.target.value})}
+          onKeyDown={e => e.key === "Enter" && submit()} />
+      </div>
+
+      {/* Errore */}
+      {err && (
+        <p className="fade-in" style={{ color: T.red, fontSize: 13, marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
+          ⚠ {err}
+        </p>
+      )}
+
+      {/* Bottone accedi */}
+      <button onClick={submit} style={{
+        width: "100%", padding: "17px 24px", borderRadius: 14,
+        background: `linear-gradient(135deg, ${T.gold} 0%, #a87a28 100%)`,
+        color: T.bg, border: "none", cursor: "pointer",
+        fontSize: 15, fontWeight: "700", letterSpacing: 0.5,
+        boxShadow: `0 8px 30px rgba(201,168,76,0.25)`,
+        transition: "transform 0.15s, box-shadow 0.15s",
+      }}
+        onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = "0 12px 40px rgba(201,168,76,0.35)"; }}
+        onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)";    e.currentTarget.style.boxShadow = "0 8px 30px rgba(201,168,76,0.25)"; }}
+      >
+        Accedi · {role === "cliente" ? "Area Ospiti" : "Area Business"}
+      </button>
+
+      {/* Link registrazione */}
+      <p style={{ textAlign: "center", fontSize: 13, color: T.muted, marginTop: 22 }}>
+        Non hai un account?{" "}
+        <button onClick={onGoRegister} style={{
+          background: "none", border: "none", cursor: "pointer",
+          color: T.gold, fontWeight: "600", fontSize: 13,
+          textDecoration: "underline", padding: 0,
+        }}>
+          Registrati
+        </button>
+      </p>
+
+      <p style={{ textAlign: "center", fontSize: 12, color: T.muted, marginTop: 12, lineHeight: 1.7 }}>
+        Tavoli, sapori e ricordi indimenticabili<br/>nelle migliori tavole della Puglia.
+      </p>
+    </AuthShell>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════ */
+/* 5b. REGISTER PAGE                                              */
+/* ══════════════════════════════════════════════════════════════ */
+
+// Pagina di registrazione per clienti e ristoratori.
+// Riceve registeredUsers per bloccare duplicati (stessa email già presente).
+// Al termine chiama onRegistered(utente, password) → il root salva le credenziali.
+function RegisterPage({ onRegistered, onGoLogin, registeredUsers }) {
+  const [role, setRole] = useState("cliente");
+  const [form, setForm] = useState({ name: "", email: "", pass: "", confirm: "", localeName: "", localeCity: "" });
+  const [err, setErr]   = useState("");
+
+  const upd = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const submit = () => {
+    if (!form.name.trim())          return setErr("Inserisci il tuo nome.");
+    if (!form.email.includes("@"))  return setErr("Indirizzo email non valido.");
+
+    // ── Controlla se l'email è già registrata ──
+    // Il confronto è case-insensitive per evitare duplicati tipo Mario@email.com / mario@email.com
+    const exists = registeredUsers.some(u => u.email.toLowerCase() === form.email.toLowerCase());
+    if (exists) return setErr("Questa email è già registrata. Accedi oppure usa un'email diversa.");
+
+    if (form.pass.length < 4)       return setErr("La password deve contenere almeno 4 caratteri.");
+    if (form.pass !== form.confirm) return setErr("Le password non coincidono.");
+    if (role === "ristoratore") {
+      if (!form.localeName.trim())  return setErr("Inserisci il nome del locale.");
+      if (!form.localeCity.trim())  return setErr("Inserisci la città del locale.");
+    }
+
+    // Registrazione ok: passa l'oggetto utente E la password al root.
+    // Il root li salva insieme in registeredUsers per il login futuro.
+    onRegistered(
+      { name: form.name.trim(), email: form.email, role, restaurantId: null },
+      form.pass   // ← password salvata separatamente per confronto al login
+    );
+  };
+
+  return (
+    <AuthShell>
+      <AuthLogo />
+
+      <p style={{ textAlign: "center", fontSize: 13, color: T.muted, marginBottom: 24 }}>
+        Crea il tuo account
+      </p>
+
+      {/* Toggle ruolo */}
+      <div style={{ display: "flex", background: T.surfaceHi, borderRadius: 14, padding: 4, marginBottom: 24, border: `1px solid ${T.border}` }}>
+        {[["cliente","🍽 Ospite"],["ristoratore","🏛 Ristoratore"]].map(([val, label]) => (
+          <button key={val} onClick={() => { setRole(val); setErr(""); }} style={{
+            flex: 1, padding: "11px 8px", borderRadius: 11, border: "none",
+            background: role === val ? T.gold : "transparent",
+            color:      role === val ? T.bg   : T.muted,
+            fontWeight: role === val ? "600"  : "400",
+            cursor: "pointer", transition: "all 0.2s",
+            fontSize: 13, letterSpacing: 0.5,
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {/* Nome */}
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: 1.5, display: "block", marginBottom: 8 }}>
+          {role === "cliente" ? "Nome Completo" : "Nome del Responsabile"}
+        </label>
+        <input type="text" placeholder="Mario Rossi"
+          value={form.name} onChange={e => upd("name", e.target.value)} />
+      </div>
+
+      {/* Campi extra solo per ristoratori */}
+      {role === "ristoratore" && (
+        <>
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: 1.5, display: "block", marginBottom: 8 }}>Nome del Locale</label>
+            <input type="text" placeholder="Es. Osteria del Vino"
+              value={form.localeName} onChange={e => upd("localeName", e.target.value)} />
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: 1.5, display: "block", marginBottom: 8 }}>Città</label>
+            <input type="text" placeholder="Es. Bari"
+              value={form.localeCity} onChange={e => upd("localeCity", e.target.value)} />
+          </div>
+        </>
+      )}
+
+      {/* Email */}
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: 1.5, display: "block", marginBottom: 8 }}>Email</label>
+        <input type="email" placeholder="nome@esempio.com"
+          value={form.email} onChange={e => upd("email", e.target.value)} />
+      </div>
+
+      {/* Password */}
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: 1.5, display: "block", marginBottom: 8 }}>Password</label>
+        <input type="password" placeholder="••••••••"
+          value={form.pass} onChange={e => upd("pass", e.target.value)} />
+      </div>
+
+      {/* Conferma password */}
+      <div style={{ marginBottom: 20 }}>
+        <label style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: 1.5, display: "block", marginBottom: 8 }}>Conferma Password</label>
+        <input type="password" placeholder="••••••••"
+          value={form.confirm} onChange={e => upd("confirm", e.target.value)}
+          onKeyDown={e => e.key === "Enter" && submit()} />
+      </div>
+
+      {/* Errore */}
+      {err && (
+        <p className="fade-in" style={{ color: T.red, fontSize: 13, marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
+          ⚠ {err}
+        </p>
+      )}
+
+      {/* Bottone registrazione */}
+      <button onClick={submit} style={{
+        width: "100%", padding: "17px 24px", borderRadius: 14,
+        background: `linear-gradient(135deg, ${T.gold} 0%, #a87a28 100%)`,
+        color: T.bg, border: "none", cursor: "pointer",
+        fontSize: 15, fontWeight: "700", letterSpacing: 0.5,
+        boxShadow: `0 8px 30px rgba(201,168,76,0.25)`,
+        transition: "transform 0.15s, box-shadow 0.15s",
+      }}
+        onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = "0 12px 40px rgba(201,168,76,0.35)"; }}
+        onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)";    e.currentTarget.style.boxShadow = "0 8px 30px rgba(201,168,76,0.25)"; }}
+      >
+        Crea Account · {role === "cliente" ? "Area Ospiti" : "Area Business"}
+      </button>
+
+      {/* Link torna al login */}
+      <p style={{ textAlign: "center", fontSize: 13, color: T.muted, marginTop: 22 }}>
+        Hai già un account?{" "}
+        <button onClick={onGoLogin} style={{
+          background: "none", border: "none", cursor: "pointer",
+          color: T.gold, fontWeight: "600", fontSize: 13,
+          textDecoration: "underline", padding: 0,
+        }}>
+          Accedi
+        </button>
+      </p>
+    </AuthShell>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════ */
+/* 5c. RESTAURANT PICK PAGE (solo ristoratori, dopo il login)    */
+/* ══════════════════════════════════════════════════════════════ */
+
+// Schermata intermedia per i ristoratori: scelta del locale da gestire.
+// Appare solo dopo login/registrazione con ruolo "ristoratore".
+function RestaurantPickPage({ user, onPick, onLogout }) {
+  const [selectedId, setSelectedId] = useState(INITIAL_RESTAURANTS[0].id);
+
+  return (
+    <AuthShell>
+      <AuthLogo />
+
+      <p style={{ textAlign: "center", fontSize: 14, color: T.creamDim, marginBottom: 28 }}>
+        Benvenuto/a, <strong style={{ color: T.goldLight }}>{user.name}</strong>.<br/>
+        <span style={{ fontSize: 12, color: T.muted }}>Seleziona il locale che vuoi gestire.</span>
+      </p>
+
+      {/* Dropdown selezione ristorante */}
+      <div style={{ marginBottom: 28 }}>
+        <label style={{ fontSize: 11, color: T.muted, textTransform: "uppercase", letterSpacing: 1.5, display: "block", marginBottom: 10 }}>
+          Il tuo Locale
+        </label>
+        <select value={selectedId} onChange={e => setSelectedId(parseInt(e.target.value))}>
+          {INITIAL_RESTAURANTS.map(r => (
+            <option key={r.id} value={r.id}>{r.name} — {r.city}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Anteprima del ristorante selezionato */}
+      {(() => {
+        const r = INITIAL_RESTAURANTS.find(x => x.id === selectedId);
+        if (!r) return null;
+        const free = r.tables.filter(t => t.status === "free").length;
+        return (
+          <div style={{ background: T.surfaceHi, border: `1px solid ${T.borderHi}`, borderRadius: 16, padding: "16px 18px", marginBottom: 24 }}>
+            <p style={{ fontFamily: fontSerif, fontSize: 20, color: T.goldLight }}>{r.name}</p>
+            <p style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>{r.city} · {r.tag} · {r.priceRange}</p>
+            <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
+              <span style={{ fontSize: 12, color: T.green }}>✦ {free} tavoli liberi</span>
+              <span style={{ fontSize: 12, color: T.gold }}>★ {r.rating}</span>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Conferma e accesso all'app Business */}
+      <button onClick={() => onPick(selectedId)} style={{
+        width: "100%", padding: "17px 24px", borderRadius: 14,
+        background: `linear-gradient(135deg, ${T.gold} 0%, #a87a28 100%)`,
+        color: T.bg, border: "none", cursor: "pointer",
+        fontSize: 15, fontWeight: "700", letterSpacing: 0.5,
+        boxShadow: `0 8px 30px rgba(201,168,76,0.25)`,
+        transition: "transform 0.15s, box-shadow 0.15s",
+      }}
+        onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = "0 12px 40px rgba(201,168,76,0.35)"; }}
+        onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)";    e.currentTarget.style.boxShadow = "0 8px 30px rgba(201,168,76,0.25)"; }}
+      >
+        Entra nell'Area Business →
+      </button>
+
+      {/* Link per tornare al login */}
+      <p style={{ textAlign: "center", fontSize: 12, color: T.muted, marginTop: 18 }}>
+        Account sbagliato?{" "}
+        <button onClick={onLogout} style={{
+          background: "none", border: "none", cursor: "pointer",
+          color: T.muted, fontSize: 12, textDecoration: "underline", padding: 0,
+        }}>
+          Esci
+        </button>
+      </p>
+    </AuthShell>
   );
 }
 
